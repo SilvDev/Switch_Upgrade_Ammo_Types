@@ -1,6 +1,6 @@
 /*
 *	Switch Upgrade Ammo Types
-*	Copyright (C) 2021 Silvers
+*	Copyright (C) 2022 Silvers
 *
 *	This program is free software: you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.9"
+#define PLUGIN_VERSION 		"1.10"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,10 @@
 
 ========================================================================================
 	Change Log:
+
+1.10 (20-Mar-2022)
+	- Added Spanish translations. Thanks to "Toranks" for providing.
+	- Changes to fix warnings when compiling on SM 1.11.
 
 1.9 (15-Sep-2021)
 	- Now uses the new forward provided by "Save Weapon" plugin modified by "HarryPotter". Requires version "5.4" or newer.
@@ -194,6 +198,8 @@ public Action CommandListener(int client, const char[] command, int args)
 			RequestFrame(OnFrameEquip, GetClientUserId(client));
 		}
 	}
+
+	return Plugin_Continue;
 }
 
 public void OnFrameEquip(int client)
@@ -292,7 +298,7 @@ void IsAllowed()
 		// Late load
 		for( int i = 1; i <= MaxClients; i++ )
 		{
-			if( IsClientInGame(i) && GetClientTeam(i) == 2  && IsPlayerAlive(i) )
+			if( IsClientInGame(i) && GetClientTeam(i) == 2 && IsPlayerAlive(i) )
 			{
 				SDKHook(i, SDKHook_WeaponEquipPost, OnWeaponEquip);
 
@@ -504,6 +510,8 @@ public Action TimerDelayDone(Handle timer, any userid)
 			OnClientSpawn(userid);
 		}
 	}
+
+	return Plugin_Continue;
 }
 
 void OnClientSpawn(int userid)
@@ -764,6 +772,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 			}
 		}
 	}
+
+	return Plugin_Continue;
 }
 
 int GetMaxClip(int weapon)
