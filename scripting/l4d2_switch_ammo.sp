@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.10"
+#define PLUGIN_VERSION 		"1.11"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,11 @@
 
 ========================================================================================
 	Change Log:
+
+1.11 (02-May-2022)
+	- Fixed late loading (turning the plugin off and on again) from not detecting stock ammo when upgrade ammo is equipped.
+	- Fixed gaining ammo issue. Thanks to "Toranks" for reporting and testing.
+	- Weapon now switches to upgrade ammo if available when no stock ammo remains.
 
 1.10 (20-Mar-2022)
 	- Added Spanish translations. Thanks to "Toranks" for providing.
@@ -84,18 +89,19 @@
 #define CVAR_FLAGS			FCVAR_NOTIFY
 #define TYPE_FIRES			(1<<0)
 #define TYPE_EXPLO			(1<<1)
+#define TYPE_STOCK			3
 
 
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarHint;//, g_hCvarSaveWeapon;
 bool g_bCvarAllow, g_bTranslation, g_bMapStarted;
 int g_iCvarHint, g_iOffsetAmmo, g_iPrimaryAmmoType;
-int g_iAmmoCount[2048][3];				// Upgrade ammo [0]=UserId. [1]=Incendiary. [2]=Explosives.
+int g_iAmmoCount[2048][4];				// Upgrade ammo [0]=UserId. [1]=Incendiary. [2]=Explosives. [3]=Stock
 int g_iAmmoBugFix[2048];				// Weapons reserve ammo.
 
 bool g_bPlayerDied[MAXPLAYERS+1];
 float g_fSwitched[MAXPLAYERS+1];
 int g_iLastWeapon[MAXPLAYERS+1];
-int g_iTransition[MAXPLAYERS+1][3];
+int g_iTransition[MAXPLAYERS+1][4];
 char g_sTransition[MAXPLAYERS+1][32];
 
 StringMap g_hClipSize;
@@ -184,7 +190,34 @@ public void OnPluginStart()
 	g_iOffsetAmmo = FindSendPropInfo("CTerrorPlayer", "m_iAmmo");
 	g_iPrimaryAmmoType = FindSendPropInfo("CBaseCombatWeapon", "m_iPrimaryAmmoType");
 	AddCommandListener(CommandListener, "give");
+
+	int weapon;
+	for( int i = 1; i <= MaxClients; i++ )
+	{
+		if( IsClientInGame(i) && GetClientTeam(i) == 2 )
+		{
+			weapon = GetPlayerWeaponSlot(i, 0);
+			if( weapon != -1 )
+			{
+				g_iLastWeapon[i] = EntIndexToEntRef(weapon);
+				g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(i, weapon);
+				g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
+			}
+		}
+	}
+
+	RegAdminCmd("sm_sa", CmdSA, ADMFLAG_ROOT, "For debugging Switch Ammo plugin.");
 }
+
+// /*
+public Action CmdSA(int client, int args)
+{
+	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	GetOrSetPlayerAmmo(client, weapon, 0);
+	SetEntProp(weapon, Prop_Send, "m_iClip1", 3);
+	return Plugin_Handled;
+}
+// */
 
 public Action CommandListener(int client, const char[] command, int args)
 {
@@ -211,6 +244,7 @@ public void OnFrameEquip(int client)
 		if( weapon != -1 )
 		{
 			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon);
+			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
 		}
 	}
 }
@@ -254,6 +288,7 @@ void ResetVars()
 		g_iAmmoCount[i][0] = 0;
 		g_iAmmoCount[i][1] = 0;
 		g_iAmmoCount[i][2] = 0;
+		g_iAmmoCount[i][3] = 0;
 	}
 }
 
@@ -307,6 +342,7 @@ void IsAllowed()
 				{
 					g_iLastWeapon[i] = EntIndexToEntRef(weapon);
 					g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(i, weapon);
+					g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
 				}
 			}
 		}
@@ -413,23 +449,26 @@ public void OnGamemode(const char[] output, int caller, int activator, float del
 //					EVENTS
 // ====================================================================================================
 // Re-create upgrade_pack for testing:
-/*
+// /*
 public void upgrade_pack_added(Event event, const char[] name, bool dontBroadcast)
 {
-	int entity = event.GetInt("upgradeid");
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if( !IsFakeClient(client) )
 	{
+		int entity = event.GetInt("upgradeid");
+
 		char class[32];
 		float vOrigin[3], vAngles[3];
 		GetEntPropVector(entity, Prop_Data, "m_vecOrigin", vOrigin);
 		GetEntPropVector(entity, Prop_Data, "m_angRotation", vAngles);
 		GetEdictClassname(entity, class, sizeof(class));
 		RemoveEntity(entity);
-
+		
 		if( strcmp(class, "upgrade_ammo_incendiary") == 0 )
 			entity = CreateEntityByName("upgrade_ammo_incendiary");
 		else if( strcmp(class, "upgrade_ammo_explosive") == 0 )
 			entity = CreateEntityByName("upgrade_ammo_explosive");
-
+		
 		TeleportEntity(entity, vOrigin, vAngles, NULL_VECTOR);
 		DispatchSpawn(entity);
 	}
@@ -461,6 +500,7 @@ public void Event_Transition(Event event, const char[] name, bool dontBroadcast)
 					g_iTransition[i][0] = GetClientUserId(i);
 					g_iTransition[i][1] = g_iAmmoCount[weapon][1];
 					g_iTransition[i][2] = g_iAmmoCount[weapon][2];
+					g_iTransition[i][3] = g_iAmmoCount[weapon][3];
 				}
 			}
 		}
@@ -530,6 +570,7 @@ void OnClientSpawn(int userid)
 				g_iAmmoCount[weapon][0] = EntIndexToEntRef(weapon);
 				g_iAmmoCount[weapon][TYPE_FIRES] = g_iTransition[client][TYPE_FIRES];
 				g_iAmmoCount[weapon][TYPE_EXPLO] = g_iTransition[client][TYPE_EXPLO];
+				g_iAmmoCount[weapon][TYPE_STOCK] = g_iTransition[client][TYPE_STOCK];
 			}
 		}
 	}
@@ -550,6 +591,7 @@ public void OnWeaponEquip(int client, int weapon)
 	{
 		g_iLastWeapon[client] = EntIndexToEntRef(main);
 		RequestFrame(OnFrameEquip, GetClientUserId(client));
+		g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
 	}
 }
 
@@ -578,9 +620,17 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 			{
 				if( ammo == 1 )
 				{
-					g_iAmmoCount[weapon][type] = 0;
 					ammo = GetMaxClip(weapon);
-					GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo - GetEntProp(weapon, Prop_Send, "m_iClip1") + 1);
+
+					if( GetOrSetPlayerAmmo(client, weapon) > ammo )
+					{
+						GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo - GetEntProp(weapon, Prop_Send, "m_iClip1") + 1);
+					} else {
+						GetOrSetPlayerAmmo(client, weapon, g_iAmmoCount[weapon][TYPE_STOCK]);
+					}
+
+					g_iAmmoCount[weapon][type] = 0;
+					GetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_STOCK]);
 				}
 				else
 				{
@@ -593,9 +643,27 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 		{
 			ammo = GetMaxClip(weapon);
 			ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
-			if( ammo < 0 ) ammo = 0;
+			g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1") - 1;
 
+			if( ammo < 0 ) ammo = 0;
 			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon) - ammo - 1;
+			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
+
+			if( GetEntProp(weapon, Prop_Send, "m_iClip1") == 1 && GetOrSetPlayerAmmo(client, weapon) == 0 )
+			{
+				if( g_iAmmoCount[weapon][TYPE_FIRES] )
+				{
+					SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", TYPE_FIRES);
+					SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", g_iAmmoCount[weapon][TYPE_FIRES]);
+					SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_FIRES]);
+				}
+				else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
+				{
+					SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", TYPE_EXPLO);
+					SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", g_iAmmoCount[weapon][TYPE_EXPLO]);
+					SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_EXPLO]);
+				}
+			}
 		}
 	}
 }
@@ -678,8 +746,17 @@ public void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
 	if( weapon != -1 )
 	{
 		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-		g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon) - ammo;
-		GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon]);
+
+		if( ammo )
+		{
+			g_iAmmoCount[weapon][TYPE_STOCK] = ammo;
+			ammo = GetOrSetPlayerAmmo(client, weapon) - ammo;
+			g_iAmmoBugFix[weapon] = ammo - (GetMaxClip(weapon) - GetEntProp(weapon, Prop_Send, "m_iClip1"));
+		} else {
+			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon);
+			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
+			GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon]);
+		}
 	}
 }
 
@@ -729,17 +806,24 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							// No explosive, reset to stock
 							else
 							{
-								// Ammo bug fix
-								ammo = GetMaxClip(weapon);
-								ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
-								if( ammo < 0 ) ammo = 0;
-								GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo);
+								// Verify has stock ammo to switch to
+								if( g_iAmmoCount[weapon][TYPE_STOCK] )
+								{
+									// Ammo bug fix
+									ammo = GetMaxClip(weapon);
+									ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
+									if( ammo < 0 ) ammo = 0;
+									GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo);
 
-								// Reset to stock ammo
-								type &= ~TYPE_FIRES;
-								type &= ~TYPE_EXPLO;
-								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
+									if( g_iAmmoBugFix[weapon] == 0 )
+										SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_STOCK]);
+
+									// Reset to stock ammo
+									type &= ~TYPE_FIRES;
+									type &= ~TYPE_EXPLO;
+									SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+									SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
+								}
 							}
 						}
 						// No upgraded ammo, switch to one
@@ -748,8 +832,11 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							// Ammo bug fix
 							ammo = GetMaxClip(weapon);
 							ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
+							g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
+	
 							if( ammo < 0 ) ammo = 0;
 							g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon) - ammo;
+							if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
 		
 							// Set upgrade ammo
 							if( g_iAmmoCount[weapon][TYPE_FIRES] )
@@ -758,6 +845,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 								type |= TYPE_FIRES;
 								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
 								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
 							}
 							else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
 							{
@@ -765,6 +853,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 								type |= TYPE_EXPLO;
 								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
 								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
 							}
 						}
 					}
