@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.11"
+#define PLUGIN_VERSION 		"1.12"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.12 (13-May-2022)
+	- Fixed invalid entity error. Thanks to "sonic155" for reporting.
 
 1.11 (02-May-2022)
 	- Fixed late loading (turning the plugin off and on again) from not detecting stock ammo when upgrade ammo is equipped.
@@ -599,12 +602,12 @@ public void OnWeaponEquip(int client, int weapon)
 public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if( IsFakeClient(client) ) return;
+	if( client < 1 || IsFakeClient(client) ) return;
 
 	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
 
 	// Has upgraded ammo
-	if( weapon == GetPlayerWeaponSlot(client, 0) )
+	if( weapon != -1 && weapon == GetPlayerWeaponSlot(client, 0) )
 	{
 		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
 		if( ammo )
