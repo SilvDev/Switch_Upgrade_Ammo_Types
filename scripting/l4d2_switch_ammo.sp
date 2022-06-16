@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.12"
+#define PLUGIN_VERSION 		"1.13"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.13 (16-Jun-2022)
+	- Fixed a bug where you couldn't switch to stock ammo. Thanks to "Toranks" for reporting.
 
 1.12 (13-May-2022)
 	- Fixed invalid entity error. Thanks to "sonic155" for reporting.
@@ -93,6 +96,7 @@
 #define TYPE_FIRES			(1<<0)
 #define TYPE_EXPLO			(1<<1)
 #define TYPE_STOCK			3
+#define DEBUG_PLUGIN		0
 
 
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarHint;//, g_hCvarSaveWeapon;
@@ -209,20 +213,24 @@ public void OnPluginStart()
 		}
 	}
 
+	#if DEBUG_PLUGIN
 	RegAdminCmd("sm_sa", CmdSA, ADMFLAG_ROOT, "For debugging Switch Ammo plugin.");
+	#endif
 }
 
-// /*
-public Action CmdSA(int client, int args)
+#if DEBUG_PLUGIN
+Action CmdSA(int client, int args)
 {
 	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	GetOrSetPlayerAmmo(client, weapon, 0);
+	GetOrSetPlayerAmmo(client, weapon, 11);
+	g_iAmmoBugFix[weapon] = 11;
+	g_iAmmoCount[weapon][TYPE_STOCK] = 3;
 	SetEntProp(weapon, Prop_Send, "m_iClip1", 3);
 	return Plugin_Handled;
 }
-// */
+#endif
 
-public Action CommandListener(int client, const char[] command, int args)
+Action CommandListener(int client, const char[] command, int args)
 {
 	if( args > 0 )
 	{
@@ -238,7 +246,7 @@ public Action CommandListener(int client, const char[] command, int args)
 	return Plugin_Continue;
 }
 
-public void OnFrameEquip(int client)
+void OnFrameEquip(int client)
 {
 	client = GetClientOfUserId(client);
 	if( client )
@@ -300,12 +308,12 @@ public void OnConfigsExecuted()
 	IsAllowed();
 }
 
-public void ConVarChanged_Allow(Handle convar, const char[] oldValue, const char[] newValue)
+void ConVarChanged_Allow(Handle convar, const char[] oldValue, const char[] newValue)
 {
 	IsAllowed();
 }
 
-public void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newValue)
+void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newValue)
 {
 	GetCvars();
 }
@@ -324,7 +332,10 @@ void IsAllowed()
 	if( g_bCvarAllow == false && bCvarAllow == true && bAllowMode == true )
 	{
 		g_bCvarAllow = true;
-		// HookEvent("upgrade_pack_added",		upgrade_pack_added);
+
+		#if DEBUG_PLUGIN
+		HookEvent("upgrade_pack_added",		upgrade_pack_added);
+		#endif
 		HookEvent("map_transition",			Event_Transition);
 		HookEvent("round_start",			Event_RoundStart);
 		HookEvent("player_death",			Event_PlayerDeath);
@@ -354,7 +365,10 @@ void IsAllowed()
 	else if( g_bCvarAllow == true && (bCvarAllow == false || bAllowMode == false) )
 	{
 		g_bCvarAllow = false;
-		// UnhookEvent("upgrade_pack_added",	upgrade_pack_added);
+
+		#if DEBUG_PLUGIN
+		UnhookEvent("upgrade_pack_added",	upgrade_pack_added);
+		#endif
 		UnhookEvent("map_transition",		Event_Transition);
 		UnhookEvent("round_start",			Event_RoundStart);
 		UnhookEvent("player_spawn",			Event_PlayerSpawn);
@@ -434,7 +448,7 @@ bool IsAllowedGameMode()
 	return true;
 }
 
-public void OnGamemode(const char[] output, int caller, int activator, float delay)
+void OnGamemode(const char[] output, int caller, int activator, float delay)
 {
 	if( strcmp(output, "OnCoop") == 0 )
 		g_iCurrentMode = 1;
@@ -452,8 +466,8 @@ public void OnGamemode(const char[] output, int caller, int activator, float del
 //					EVENTS
 // ====================================================================================================
 // Re-create upgrade_pack for testing:
-// /*
-public void upgrade_pack_added(Event event, const char[] name, bool dontBroadcast)
+#if DEBUG_PLUGIN
+void upgrade_pack_added(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if( !IsFakeClient(client) )
@@ -476,9 +490,9 @@ public void upgrade_pack_added(Event event, const char[] name, bool dontBroadcas
 		DispatchSpawn(entity);
 	}
 }
-// */
+#endif
 
-public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
+void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	for( int i = 1; i <= MaxClients; i++ )
 	{
@@ -486,7 +500,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
-public void Event_Transition(Event event, const char[] name, bool dontBroadcast)
+void Event_Transition(Event event, const char[] name, bool dontBroadcast)
 {
 	if( g_iCurrentMode == 1 ) // Coop only
 	{
@@ -510,7 +524,7 @@ public void Event_Transition(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
-public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
+void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 {
 	int userid = event.GetInt("userid");
 	int client = GetClientOfUserId(userid);
@@ -520,7 +534,7 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 	}
 }
 
-public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int userid = event.GetInt("userid");
 	int client = GetClientOfUserId(userid);
@@ -543,7 +557,7 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 	}
 }
 
-public Action TimerDelayDone(Handle timer, any userid)
+Action TimerDelayDone(Handle timer, any userid)
 {
 	int client = GetClientOfUserId(userid);
 	if( client && IsClientInGame(client) )
@@ -587,7 +601,7 @@ public void L4D2_OnSaveWeaponHxGiveC(int client)
 }
 
 // Main plugin logic stuff
-public void OnWeaponEquip(int client, int weapon)
+void OnWeaponEquip(int client, int weapon)
 {
 	int main = GetPlayerWeaponSlot(client, 0);
 	if( main != -1 && (g_iLastWeapon[client] == 0 || EntRefToEntIndex(g_iLastWeapon[client]) != main) )
@@ -599,7 +613,7 @@ public void OnWeaponEquip(int client, int weapon)
 }
 
 // Fix ammo bug
-public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
+void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if( client < 1 || IsFakeClient(client) ) return;
@@ -671,7 +685,7 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
-public void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
+void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if( IsFakeClient(client) ) return;
@@ -740,7 +754,7 @@ public void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast
 	}
 }
 
-public void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
+void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if( IsFakeClient(client) ) return;
@@ -783,7 +797,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 				{
 					static char classname[32];
 					GetEdictClassname(weapon, classname, sizeof(classname));
-					if( strcmp(classname[7], "rifle_m60") && strcmp(classname[7], "grenade_launcher") )
+					if( strcmp(classname[7], "rifle_m60") && strcmp(classname[7], "grenade_launcher") ) // Ignore these classes
 					{
 						int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
 						int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
@@ -810,7 +824,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							else
 							{
 								// Verify has stock ammo to switch to
-								if( g_iAmmoCount[weapon][TYPE_STOCK] )
+								if( g_iAmmoCount[weapon][TYPE_STOCK] || g_iAmmoBugFix[weapon] - ammo > 0 )
 								{
 									// Ammo bug fix
 									ammo = GetMaxClip(weapon);
