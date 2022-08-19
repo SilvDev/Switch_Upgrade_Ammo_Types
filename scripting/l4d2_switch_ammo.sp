@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.14"
+#define PLUGIN_VERSION 		"1.15"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,13 @@
 
 ========================================================================================
 	Change Log:
+
+1.15 (19-Aug-2022)
+	- Added GameData file and new feature to reload the gun when changing ammo types. Requested by "Shao".
+	- Added cvar "l4d2_switch_ammo_guns" to control if the "Grenade Launcher" or "Rifle M60" ammo can be switched.
+	- Changed cvar "l4d2_switch_ammo_reload" to control if shotguns should reload the whole clip or 1 round.
+	- Now prevents swapping ammo until the weapon is ready to shoot.
+	- Thanks to "Shao" and "Toranks" for testing.
 
 1.14 (12-Aug-2022)
 	- Added cvar "l4d2_switch_ammo_reload" to wait for reloading to finish before switch ammo type. Requested by "Shao".
@@ -96,43 +103,37 @@
 #include <sdkhooks>
 
 #define CVAR_FLAGS			FCVAR_NOTIFY
+#define GAMEDATA			"l4d2_switch_ammo"
+
 #define TYPE_FIRES			(1<<0)
 #define TYPE_EXPLO			(1<<1)
 #define TYPE_STOCK			3
+
+// Setting to 1 re-creates the upgrade packs after use, for constant testing
 #define DEBUG_PLUGIN		0
 
 
-ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarHint, g_hCvarReload;//, g_hCvarSaveWeapon;
-bool g_bCvarAllow, g_bTranslation, g_bMapStarted, g_bCvarReload;
-int g_iCvarHint, g_iOffsetAmmo, g_iPrimaryAmmoType;
+ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarGuns, g_hCvarHint, g_hCvarReload;
+bool g_bCvarAllow, g_bTranslation, g_bMapStarted;
+int g_iCvarGuns, g_iCvarHint, g_iCvarReload, g_iOffsetAmmo, g_iPrimaryAmmoType;
 int g_iAmmoCount[2048][4];				// Upgrade ammo [0]=UserId. [1]=Incendiary. [2]=Explosives. [3]=Stock
-int g_iAmmoBugFix[2048];				// Weapons reserve ammo.
 
 bool g_bPlayerDied[MAXPLAYERS+1];
-float g_fSwitched[MAXPLAYERS+1];
+int g_bBlockedUse[MAXPLAYERS+1];
 int g_iLastWeapon[MAXPLAYERS+1];
 int g_iTransition[MAXPLAYERS+1][4];
+float g_fSwitched[MAXPLAYERS+1];
 char g_sTransition[MAXPLAYERS+1][32];
+
+Handle g_hSDK_Call_Reload;
 
 StringMap g_hClipSize;
 char g_sWeapons[][] =
 {
-	"weapon_rifle",
-	"weapon_smg",
 	"weapon_pumpshotgun",
 	"weapon_shotgun_chrome",
 	"weapon_autoshotgun",
-	"weapon_hunting_rifle",
-	"weapon_rifle_sg552",
-	"weapon_rifle_desert",
-	"weapon_rifle_ak47",
-	"weapon_smg_silenced",
-	"weapon_smg_mp5",
-	"weapon_shotgun_spas",
-	"weapon_sniper_scout",
-	"weapon_sniper_military",
-	"weapon_sniper_awp"
-	// "weapon_grenade_launcher"
+	"weapon_shotgun_spas"
 };
 
 
@@ -160,13 +161,11 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	return APLRes_Success;
 }
 
-// public void OnAllPluginsLoaded()
-// {
-	// g_hCvarSaveWeapon = FindConVar("l4d2_hx_health");
-// }
-
 public void OnPluginStart()
 {
+	// ====================================================================================================
+	// TRANSLATIONS
+	// ====================================================================================================
 	char sPath[PLATFORM_MAX_PATH];
 	BuildPath(Path_SM, sPath, PLATFORM_MAX_PATH, "translations/switch_ammo.phrases.txt");
 
@@ -182,8 +181,9 @@ public void OnPluginStart()
 	// CVARS
 	// ====================================================================================================
 	g_hCvarAllow =		CreateConVar(	"l4d2_switch_ammo_allow",			"1",				"0=Plugin off, 1=Plugin on.", CVAR_FLAGS );
+	g_hCvarGuns =		CreateConVar(	"l4d2_switch_ammo_guns",			"0",				"Allow swapping ammo on: 0=Neither. 1=Grenade Launcher. 2=M60. 3=Both.", CVAR_FLAGS );
 	g_hCvarHint =		CreateConVar(	"l4d2_switch_ammo_hint",			"1",				"Display a hint when taking upgrade ammo about how to use the plugin. 0=Off. 1=Print to Chat. 2=Hint text.", CVAR_FLAGS );
-	g_hCvarReload =		CreateConVar(	"l4d2_switch_ammo_reload",			"1",				"0=Off. 1=Wait for reloading to finish before switching ammo types again.", CVAR_FLAGS );
+	g_hCvarReload =		CreateConVar(	"l4d2_switch_ammo_reload",			"0",				"0=Reload shotguns by emptying the clip when changing ammo types. 1=Shotguns will reload 1 bullet before the clip is full.", CVAR_FLAGS );
 	g_hCvarModes =		CreateConVar(	"l4d2_switch_ammo_modes",			"",					"Turn on the plugin in these game modes, separate by commas (no spaces). (Empty = all).", CVAR_FLAGS );
 	g_hCvarModesOff =	CreateConVar(	"l4d2_switch_ammo_modes_off",		"",					"Turn off the plugin in these game modes, separate by commas (no spaces). (Empty = none).", CVAR_FLAGS );
 	g_hCvarModesTog =	CreateConVar(	"l4d2_switch_ammo_modes_tog",		"0",				"Turn on the plugin in these game modes. 0=All, 1=Coop, 2=Survival, 4=Versus, 8=Scavenge. Add numbers together.", CVAR_FLAGS );
@@ -196,27 +196,52 @@ public void OnPluginStart()
 	g_hCvarModesOff.AddChangeHook(ConVarChanged_Allow);
 	g_hCvarModesTog.AddChangeHook(ConVarChanged_Allow);
 	g_hCvarAllow.AddChangeHook(ConVarChanged_Allow);
+	g_hCvarGuns.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarHint.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarReload.AddChangeHook(ConVarChanged_Cvars);
 
+	// =========================
+	// GAMEDATA
+	// =========================
+	BuildPath(Path_SM, sPath, sizeof(sPath), "gamedata/%s.txt", GAMEDATA);
+	if( FileExists(sPath) == false )
+	{
+		// SetFailState("\n==========\nMissing required file: \"%s\".\nRead installation instructions again.\n==========", sPath);
+
+		File hFile = OpenFile(sPath, "w");
+		hFile.WriteLine("\"Games\"");
+		hFile.WriteLine("{");
+		hFile.WriteLine("	\"left4dead2\"");
+		hFile.WriteLine("	{");
+		hFile.WriteLine("		\"Offsets\"");
+		hFile.WriteLine("		{");
+		hFile.WriteLine("			\"CTerrorGun::Reload\"");
+		hFile.WriteLine("			{");
+		hFile.WriteLine("				\"windows\"	\"281\"");
+		hFile.WriteLine("				\"linux\"		\"282\"");
+		hFile.WriteLine("			}");
+		hFile.WriteLine("		}");
+		hFile.WriteLine("	}");
+		hFile.WriteLine("}");
+		delete hFile;
+	}
+
+	GameData hGameData = new GameData(GAMEDATA);
+	if( hGameData == null ) SetFailState("Failed to load \"%s.txt\" gamedata.", GAMEDATA);
+
+	StartPrepSDKCall(SDKCall_Entity);
+	if( PrepSDKCall_SetFromConf(hGameData, SDKConf_Virtual, "CTerrorGun::Reload") == false )
+		SetFailState("Failed to find offset: CTerrorGun::Reload");
+	g_hSDK_Call_Reload = EndPrepSDKCall();
+	if( g_hSDK_Call_Reload == null )
+		SetFailState("Failed to create SDKCall: CTerrorGun::Reload");
+
+	// ====================================================================================================
+	// OFFSETS
+	// ====================================================================================================
 	g_iOffsetAmmo = FindSendPropInfo("CTerrorPlayer", "m_iAmmo");
 	g_iPrimaryAmmoType = FindSendPropInfo("CBaseCombatWeapon", "m_iPrimaryAmmoType");
 	AddCommandListener(CommandListener, "give");
-
-	int weapon;
-	for( int i = 1; i <= MaxClients; i++ )
-	{
-		if( IsClientInGame(i) && GetClientTeam(i) == 2 )
-		{
-			weapon = GetPlayerWeaponSlot(i, 0);
-			if( weapon != -1 )
-			{
-				g_iLastWeapon[i] = EntIndexToEntRef(weapon);
-				g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(i, weapon);
-				g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
-			}
-		}
-	}
 
 	#if DEBUG_PLUGIN
 	RegAdminCmd("sm_sa", CmdSA, ADMFLAG_ROOT, "For debugging Switch Ammo plugin.");
@@ -227,10 +252,11 @@ public void OnPluginStart()
 Action CmdSA(int client, int args)
 {
 	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	GetOrSetPlayerAmmo(client, weapon, 11);
-	g_iAmmoBugFix[weapon] = 11;
-	g_iAmmoCount[weapon][TYPE_STOCK] = 3;
-	SetEntProp(weapon, Prop_Send, "m_iClip1", 3);
+	// GetOrSetPlayerAmmo(client, weapon, 51);
+	GetOrSetPlayerAmmo(client, weapon, 5);
+	SetEntProp(weapon, Prop_Send, "m_iClip1", 5);
+
+	GetPlayerAmmo(client);
 	return Plugin_Handled;
 }
 #endif
@@ -244,25 +270,11 @@ Action CommandListener(int client, const char[] command, int args)
 
 		if( strcmp(buffer, "ammo") == 0 )
 		{
-			RequestFrame(OnFrameEquip, GetClientUserId(client));
+			RequestFrame(OnAmmoPickup, GetClientUserId(client));
 		}
 	}
 
 	return Plugin_Continue;
-}
-
-void OnFrameEquip(int client)
-{
-	client = GetClientOfUserId(client);
-	if( client )
-	{
-		int weapon = GetPlayerWeaponSlot(client, 0);
-		if( weapon != -1 )
-		{
-			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon);
-			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
-		}
-	}
 }
 
 
@@ -325,8 +337,9 @@ void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newV
 
 void GetCvars()
 {
+	g_iCvarGuns = g_hCvarGuns.IntValue;
 	g_iCvarHint = g_hCvarHint.IntValue;
-	g_bCvarReload = g_hCvarReload.BoolValue;
+	g_iCvarReload = g_hCvarReload.IntValue;
 }
 
 void IsAllowed()
@@ -342,28 +355,21 @@ void IsAllowed()
 		#if DEBUG_PLUGIN
 		HookEvent("upgrade_pack_added",		upgrade_pack_added);
 		#endif
-		HookEvent("map_transition",			Event_Transition);
 		HookEvent("round_start",			Event_RoundStart);
+		HookEvent("map_transition",			Event_Transition);
 		HookEvent("player_death",			Event_PlayerDeath);
 		HookEvent("player_spawn",			Event_PlayerSpawn);
 		HookEvent("weapon_fire",			Event_WeaponFire);
-		HookEvent("receive_upgrade",		Event_GetUpgraded);
 		HookEvent("ammo_pickup",			Event_AmmoPickup);
+		HookEvent("receive_upgrade",		Event_GetUpgraded);
 
-		// Late load
 		for( int i = 1; i <= MaxClients; i++ )
 		{
-			if( IsClientInGame(i) && GetClientTeam(i) == 2 && IsPlayerAlive(i) )
+			if( IsClientInGame(i) && GetClientTeam(i) == 2 )
 			{
 				SDKHook(i, SDKHook_WeaponEquipPost, OnWeaponEquip);
 
-				int weapon = GetPlayerWeaponSlot(i, 0);
-				if( weapon != -1 )
-				{
-					g_iLastWeapon[i] = EntIndexToEntRef(weapon);
-					g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(i, weapon);
-					g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
-				}
+				GetPlayerAmmo(i);
 			}
 		}
 	}
@@ -375,13 +381,13 @@ void IsAllowed()
 		#if DEBUG_PLUGIN
 		UnhookEvent("upgrade_pack_added",	upgrade_pack_added);
 		#endif
-		UnhookEvent("map_transition",		Event_Transition);
 		UnhookEvent("round_start",			Event_RoundStart);
+		UnhookEvent("map_transition",		Event_Transition);
 		UnhookEvent("player_spawn",			Event_PlayerSpawn);
 		UnhookEvent("player_death",			Event_PlayerDeath);
 		UnhookEvent("weapon_fire",			Event_WeaponFire);
-		UnhookEvent("receive_upgrade",		Event_GetUpgraded);
 		UnhookEvent("ammo_pickup",			Event_AmmoPickup);
+		UnhookEvent("receive_upgrade",		Event_GetUpgraded);
 
 		for( int i = 1; i <= MaxClients; i++ )
 		{
@@ -469,8 +475,16 @@ void OnGamemode(const char[] output, int caller, int activator, float delay)
 
 
 // ====================================================================================================
-//					EVENTS
+//					EVENTS - HOOK WEAPON EQUIP + DEBUG
 // ====================================================================================================
+public void OnClientPutInServer(int client)
+{
+	if( g_bCvarAllow )
+	{
+		SDKHook(client, SDKHook_WeaponEquipPost, OnWeaponEquip);
+	}
+}
+
 // Re-create upgrade_pack for testing:
 #if DEBUG_PLUGIN
 void upgrade_pack_added(Event event, const char[] name, bool dontBroadcast)
@@ -498,6 +512,11 @@ void upgrade_pack_added(Event event, const char[] name, bool dontBroadcast)
 }
 #endif
 
+
+
+// ====================================================================================================
+//					EVENTS - TRANSITION AMMO COUNTS
+// ====================================================================================================
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	for( int i = 1; i <= MaxClients; i++ )
@@ -506,6 +525,7 @@ void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
+// Store ammo counts over map change
 void Event_Transition(Event event, const char[] name, bool dontBroadcast)
 {
 	if( g_iCurrentMode == 1 ) // Coop only
@@ -530,6 +550,7 @@ void Event_Transition(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
+// Only catch first spawn for transition saving
 void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 {
 	int userid = event.GetInt("userid");
@@ -540,22 +561,18 @@ void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 	}
 }
 
+// First spawn after transition, restore ammo counts
 void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int userid = event.GetInt("userid");
 	int client = GetClientOfUserId(userid);
 	if( client && !g_bPlayerDied[client] )
 	{
-		if( IsFakeClient(client) ) return;
-
-		SDKUnhook(client, SDKHook_WeaponEquipPost, OnWeaponEquip);
-		SDKHook(client, SDKHook_WeaponEquipPost, OnWeaponEquip);
-
 		g_fSwitched[client] = 0.0;
 		g_iLastWeapon[client] = 0;
 
 		// Spawned after map transition:
-		if( g_iCurrentMode == 1 && g_sTransition[client][0] ) //&& g_hCvarSaveWeapon == null )
+		if( g_iCurrentMode == 1 && g_sTransition[client][0] && !IsFakeClient(client) ) //&& g_hCvarSaveWeapon == null )
 		{
 			// "L4D2 coop save weapon" uses 1.0 timer, due to some late loading clients 5.0 seems better.
 			CreateTimer(5.0, TimerDelayDone, userid, TIMER_FLAG_NO_MAPCHANGE);
@@ -577,6 +594,7 @@ Action TimerDelayDone(Handle timer, any userid)
 	return Plugin_Continue;
 }
 
+// Restore ammo counts
 void OnClientSpawn(int userid)
 {
 	int client = GetClientOfUserId(userid);
@@ -606,95 +624,97 @@ public void L4D2_OnSaveWeaponHxGiveC(int client)
 	OnClientSpawn(client);
 }
 
-// Main plugin logic stuff
+
+
+// ====================================================================================================
+//					EVENTS - AMMO COUNTS
+// ====================================================================================================
+// Store new weapon ammo count
 void OnWeaponEquip(int client, int weapon)
 {
-	int main = GetPlayerWeaponSlot(client, 0);
-	if( main != -1 && (g_iLastWeapon[client] == 0 || EntRefToEntIndex(g_iLastWeapon[client]) != main) )
+	// Block specific weapons
+	if( g_iCvarGuns != 3 )
 	{
-		g_iLastWeapon[client] = EntIndexToEntRef(main);
-		RequestFrame(OnFrameEquip, GetClientUserId(client));
-		g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
+		if( GetPlayerWeaponSlot(client, 0) == weapon )
+		{
+			g_bBlockedUse[client] = false;
+
+			int ref = EntIndexToEntRef(weapon);
+			if( g_iLastWeapon[client] != ref )
+			{
+				g_iLastWeapon[client] = ref;
+
+				static char classname[32];
+				GetEdictClassname(weapon, classname, sizeof(classname));
+
+				// Ignore these classes
+				if( (g_iCvarGuns == 0 || g_iCvarGuns == 1) && strcmp(classname[7], "rifle_m60") == 0 ) g_bBlockedUse[client] = true;
+				else if( (g_iCvarGuns == 0 || g_iCvarGuns == 2) && strncmp(classname[7], "grenade_l", 9) == 0 ) g_bBlockedUse[client] = true;
+			}
+		}
+	}
+
+	RequestFrame(OnFrameEquip, GetClientUserId(client));
+}
+
+void OnFrameEquip(int client)
+{
+	client = GetClientOfUserId(client);
+	if( client && IsClientInGame(client) && GetClientTeam(client) == 2 )
+	{
+		GetPlayerAmmo(client);
 	}
 }
 
-// Fix ammo bug
+// Store ammo counts
 void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if( client < 1 || IsFakeClient(client) ) return;
+	if( client < 1 || IsFakeClient(client) || GetClientTeam(client) != 2 ) return;
 
-	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	bool shotgun;
 
-	// Has upgraded ammo
-	if( weapon != -1 && weapon == GetPlayerWeaponSlot(client, 0) )
+	int id = event.GetInt("weaponid");
+	switch( id )
 	{
-		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-		if( ammo )
+		// Shotguns
+		case 3, 4, 8, 11:
 		{
-			// Using fire type, switch to explosive
-			int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
-
-			if( type & TYPE_FIRES ) type = TYPE_FIRES;
-			else if( type & TYPE_EXPLO ) type = TYPE_EXPLO;
-			else type = 0;
-
-			if( type )
-			{
-				if( ammo == 1 )
-				{
-					ammo = GetMaxClip(weapon);
-
-					if( GetOrSetPlayerAmmo(client, weapon) > ammo )
-					{
-						GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo - GetEntProp(weapon, Prop_Send, "m_iClip1") + 1);
-					} else {
-						GetOrSetPlayerAmmo(client, weapon, g_iAmmoCount[weapon][TYPE_STOCK]);
-					}
-
-					g_iAmmoCount[weapon][type] = 0;
-					GetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_STOCK]);
-				}
-				else
-				{
-					g_iAmmoCount[weapon][type] = ammo - 1;
-					GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon]);
-				}
-			}
+			shotgun = true;
 		}
-		else
-		{
-			ammo = GetMaxClip(weapon);
-			ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
-			g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1") - 1;
+	}
 
-			if( ammo < 0 ) ammo = 0;
-			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon) - ammo - 1;
-			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
-
-			if( GetEntProp(weapon, Prop_Send, "m_iClip1") == 1 && GetOrSetPlayerAmmo(client, weapon) == 0 )
-			{
-				if( g_iAmmoCount[weapon][TYPE_FIRES] )
-				{
-					SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", TYPE_FIRES);
-					SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", g_iAmmoCount[weapon][TYPE_FIRES]);
-					SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_FIRES]);
-				}
-				else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
-				{
-					SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", TYPE_EXPLO);
-					SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", g_iAmmoCount[weapon][TYPE_EXPLO]);
-					SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_EXPLO]);
-				}
-			}
-		}
+	if( GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") == GetPlayerWeaponSlot(client, 0) )
+	{
+		GetPlayerAmmo(client, true, shotgun);
 	}
 }
 
+// Store ammo counts
+void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
+{
+	int userid = event.GetInt("userid");
+	int client = GetClientOfUserId(userid);
+	if( client < 1 || IsFakeClient(client) || GetClientTeam(client) != 2 ) return;
+
+	RequestFrame(OnAmmoPickup, userid);
+}
+
+// Delayed by 1 frame to get real ammo count values
+void OnAmmoPickup(int client)
+{
+	client = GetClientOfUserId(client);
+	if( client && IsClientInGame(client) && GetClientTeam(client) == 2 )
+	{
+		GetPlayerAmmo(client);
+	}
+}
+
+// Print hints and store ammo count
 void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if( IsFakeClient(client) ) return;
+	if( client < 1 || IsFakeClient(client) || GetClientTeam(client) != 2 ) return;
 
 	char sTemp[4];
 	event.GetString("upgrade", sTemp, sizeof(sTemp));
@@ -743,7 +763,7 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 				}
 			}
 
-			// Stuff
+			// Save ammo counts
 			int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
 
 			if( g_iAmmoCount[weapon][0] == 0 || EntRefToEntIndex(g_iAmmoCount[weapon][0]) != weapon )
@@ -754,31 +774,6 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 			}
 
 			g_iAmmoCount[weapon][type] = ammo;
-
-			GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon]);
-		}
-	}
-}
-
-void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
-{
-	int client = GetClientOfUserId(event.GetInt("userid"));
-	if( IsFakeClient(client) ) return;
-
-	int weapon = GetPlayerWeaponSlot(client, 0);
-	if( weapon != -1 )
-	{
-		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-
-		if( ammo )
-		{
-			g_iAmmoCount[weapon][TYPE_STOCK] = ammo;
-			ammo = GetOrSetPlayerAmmo(client, weapon) - ammo;
-			g_iAmmoBugFix[weapon] = ammo - (GetMaxClip(weapon) - GetEntProp(weapon, Prop_Send, "m_iClip1"));
-		} else {
-			g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon);
-			if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
-			GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon]);
 		}
 	}
 }
@@ -800,89 +795,75 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 			weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
 			if( weapon > 0 )
 			{
-				// Validate primary weapon
-				if( weapon == GetPlayerWeaponSlot(client, 0) )
+				// Validate primary weapon and allowed to shoot
+				if( weapon == GetPlayerWeaponSlot(client, 0) && GetEntPropFloat(weapon, Prop_Data, "m_flNextPrimaryAttack") < GetGameTime() )
 				{
-					// Validate not reloading, or allowed
-					if( !g_bCvarReload || GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
+					// Validate not reloading,
+					if( GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
 					{
-						static char classname[32];
-						GetEdictClassname(weapon, classname, sizeof(classname));
-						if( strcmp(classname[7], "rifle_m60") && strcmp(classname[7], "grenade_launcher") ) // Ignore these classes
+						// Block weapons
+						if( g_bBlockedUse[client] ) return Plugin_Continue;
+
+						// Get upgrade ammo count and type
+						int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+						int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+
+						// Has upgraded ammo
+						if( ammo )
 						{
-							int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-							int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+							if( type & TYPE_FIRES )
+								g_iAmmoCount[weapon][TYPE_FIRES] = ammo;
+							else
+								g_iAmmoCount[weapon][TYPE_EXPLO] = ammo;
 
-							// Has upgraded ammo
-							if( ammo )
+							// Switch from fire to explosive
+							ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+							if( type & TYPE_FIRES && ammo )
 							{
-								// Using fire type, switch to explosive
-								if( type & TYPE_FIRES )
-									g_iAmmoCount[weapon][TYPE_FIRES] = ammo;
-								else
-									g_iAmmoCount[weapon][TYPE_EXPLO] = ammo;
+								ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
 
-								if( type & TYPE_FIRES && g_iAmmoCount[weapon][TYPE_EXPLO] )
-								{
-									ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+								type &= ~TYPE_FIRES;
+								type |= TYPE_EXPLO;
+								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
 
-									type &= ~TYPE_FIRES;
-									type |= TYPE_EXPLO;
-									SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-									SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
-								}
-								// No explosive, reset to stock
-								else
-								{
-									// Verify has stock ammo to switch to
-									if( g_iAmmoCount[weapon][TYPE_STOCK] || g_iAmmoBugFix[weapon] - ammo > 0 )
-									{
-										// Ammo bug fix
-										ammo = GetMaxClip(weapon);
-										ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
-										if( ammo < 0 ) ammo = 0;
-										GetOrSetPlayerAmmo(client, weapon, g_iAmmoBugFix[weapon] + ammo);
-
-										if( g_iAmmoBugFix[weapon] == 0 )
-											SetEntProp(weapon, Prop_Send, "m_iClip1", g_iAmmoCount[weapon][TYPE_STOCK]);
-
-										// Reset to stock ammo
-										type &= ~TYPE_FIRES;
-										type &= ~TYPE_EXPLO;
-										SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-										SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
-									}
-								}
+								ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
 							}
-							// No upgraded ammo, switch to one
+							// No explosive, reset to stock
 							else
 							{
-								// Ammo bug fix
-								ammo = GetMaxClip(weapon);
-								ammo = ammo - GetEntProp(weapon, Prop_Send, "m_iClip1");
-								g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1");
-		
-								if( ammo < 0 ) ammo = 0;
-								g_iAmmoBugFix[weapon] = GetOrSetPlayerAmmo(client, weapon) - ammo;
-								if( g_iAmmoBugFix[weapon] < 0 ) g_iAmmoBugFix[weapon] = 0;
-			
-								// Set upgrade ammo
-								if( g_iAmmoCount[weapon][TYPE_FIRES] )
-								{
-									ammo = g_iAmmoCount[weapon][TYPE_FIRES];
-									type |= TYPE_FIRES;
-									SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-									SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
-									SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
-								}
-								else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
-								{
-									ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
-									type |= TYPE_EXPLO;
-									SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-									SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
-									SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
-								}
+								ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+
+								// Reset to stock ammo
+								type &= ~TYPE_FIRES;
+								type &= ~TYPE_EXPLO;
+								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
+
+								ReloadWeapon(client, weapon, ammo, TYPE_STOCK);
+							}
+						}
+						else
+						{
+							if( g_iAmmoCount[weapon][TYPE_FIRES] )
+							{
+								ammo = g_iAmmoCount[weapon][TYPE_FIRES];
+								type |= TYPE_FIRES;
+								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+
+								ReloadWeapon(client, weapon, ammo, TYPE_FIRES);
+							}
+							else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
+							{
+								ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+								type |= TYPE_EXPLO;
+								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+
+								ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
 							}
 						}
 					}
@@ -894,13 +875,168 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	return Plugin_Continue;
 }
 
-int GetMaxClip(int weapon)
+
+
+// ====================================================================================================
+//					RELOAD WEAPON
+// ====================================================================================================
+void ReloadWeapon(int client, int weapon, int ammo, int type)
 {
-	int ammo;
-	static char sClass[32];
-	GetEdictClassname(weapon, sClass, sizeof(sClass));
-	g_hClipSize.GetValue(sClass, ammo);
-	return ammo;
+	// Save ammo
+	int reserve = g_iAmmoCount[weapon][TYPE_STOCK];
+
+	// Shotgun ammo bug fix
+	static char classname[32];
+	GetEdictClassname(weapon, classname, sizeof(classname));
+	if( strcmp(classname[7], "pumpshotgun") == 0 || strcmp(classname[7], "shotgun_chrome") == 0 || strcmp(classname[7], "autoshotgun") == 0 || strcmp(classname[7], "shotgun_spas") == 0 )
+	{
+		if( g_iCvarReload )
+		{
+			// Reload 1 bullet only
+			ammo = GetMaxClip(weapon) - 1;
+			if( ammo > reserve ) ammo = reserve - 1;
+			if( ammo < 0 ) ammo = 0;
+			reserve -= ammo;
+		}
+		else
+		{
+			// Reload from empty
+			ammo = 0;
+
+			// Force reload again, otherwise the player will only reload 1 bullet even if the clip is no full
+			DataPack dPack = new DataPack();
+			dPack.WriteCell(GetClientUserId(client));
+			dPack.WriteCell(EntIndexToEntRef(weapon));
+			CreateTimer(0.1, TimerReload, dPack, TIMER_REPEAT);
+		}
+	}
+	else if( type == TYPE_STOCK )
+	{
+		ammo = 0;
+	}
+
+	// Set for reload
+	GetOrSetPlayerAmmo(client, weapon, 1);
+	SetEntProp(weapon, Prop_Send, "m_iClip1", 0);
+
+	// Reload
+	SDKCall(g_hSDK_Call_Reload, weapon);
+
+	// Restore next frame
+	DataPack dPack = new DataPack();
+	dPack.WriteCell(GetClientUserId(client));
+	dPack.WriteCell(EntIndexToEntRef(weapon));
+	dPack.WriteCell(ammo);
+	dPack.WriteCell(reserve);
+	RequestFrame(OnFrameReload, dPack);
+}
+
+void OnFrameReload(DataPack dPack)
+{
+	dPack.Reset();
+
+	int client = dPack.ReadCell();
+	int weapon = dPack.ReadCell();
+
+	weapon = EntRefToEntIndex(weapon);
+	if( weapon != INVALID_ENT_REFERENCE )
+	{
+		// Set clip ammo
+		int ammo = dPack.ReadCell();
+		SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+
+		// Set reserve ammo
+		client = GetClientOfUserId(client);
+		if( client && IsClientInGame(client) )
+		{
+			ammo = dPack.ReadCell();
+			GetOrSetPlayerAmmo(client, weapon, ammo);
+		}
+	}
+
+	delete dPack;
+}
+
+// Have to delay by 1 frame or the reserve ammo never resets
+Action TimerReload(Handle timer, DataPack dPack)
+{
+	dPack.Reset();
+	int client = dPack.ReadCell();
+	int weapon = dPack.ReadCell();
+
+	// Validate weapon
+	weapon = EntRefToEntIndex(weapon);
+	if( weapon != INVALID_ENT_REFERENCE )
+	{
+		// Validate client and active weapon is one to reload
+		client = GetClientOfUserId(client);
+		if( client && IsClientInGame(client) && GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") == weapon )
+		{
+			// If still reloading continue waiting
+			if( GetEntProp(weapon, Prop_Send, "m_bInReload") == 1 )
+			{
+				return Plugin_Continue;
+			}
+			else
+			{
+				SDKCall(g_hSDK_Call_Reload, weapon);
+			}
+		}
+	}
+
+	delete dPack;
+	return Plugin_Stop;
+}
+
+
+
+// ====================================================================================================
+//					GET AMMO COUNTS
+// ====================================================================================================
+void GetPlayerAmmo(int client, bool shooting = false, bool shotgun = false)
+{
+	int weapon = GetPlayerWeaponSlot(client, 0);
+	if( weapon != -1 )
+	{
+		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+		int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+
+		// Has upgraded ammo, save count
+		if( ammo )
+		{
+			// Save upgraded ammo count, minus one if shooting
+			if( type & TYPE_FIRES )
+				g_iAmmoCount[weapon][TYPE_FIRES] = ammo - (shooting ? 1 : 0);
+			else
+				g_iAmmoCount[weapon][TYPE_EXPLO] = ammo - (shooting ? 1 : 0);
+		}
+
+		// Save stock ammo (reserve + clip), minus upgrade ammo and minus 1 bullet if shooting stock ammo
+		if( !shotgun || !ammo )
+		{
+			g_iAmmoCount[weapon][TYPE_STOCK] = GetEntProp(weapon, Prop_Send, "m_iClip1") + GetOrSetPlayerAmmo(client, weapon) - ammo - (!ammo && shooting ? 1 : 0);
+		}
+
+		// When using all upgrade ammo, shotguns may have normal bullets in the clip, but the reserve ammo is depleted by that number
+		if( shotgun && ammo == 1 )
+		{
+			g_iAmmoCount[weapon][TYPE_STOCK] -= (GetEntProp(weapon, Prop_Send, "m_iClip1") - ammo);
+			RequestFrame(OnFrameAmmo, GetClientUserId(client));
+		}
+	}
+}
+
+void OnFrameAmmo(int client)
+{
+	client = GetClientOfUserId(client);
+	if( client && IsClientInGame(client) )
+	{
+		int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+		if( weapon == GetPlayerWeaponSlot(client, 0) )
+		{
+			GetOrSetPlayerAmmo(client, weapon, g_iAmmoCount[weapon][TYPE_STOCK]);
+		}
+	}
 }
 
 int GetOrSetPlayerAmmo(int client, int iWeapon, int iAmmo = -1)
@@ -915,6 +1051,15 @@ int GetOrSetPlayerAmmo(int client, int iWeapon, int iAmmo = -1)
 	}
 
 	return 0;
+}
+
+int GetMaxClip(int weapon)
+{
+	int ammo;
+	static char sClass[32];
+	GetEdictClassname(weapon, sClass, sizeof(sClass));
+	g_hClipSize.GetValue(sClass, ammo);
+	return ammo;
 }
 
 
