@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.15"
+#define PLUGIN_VERSION 		"1.16"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.16 (25-Aug-2022)
+	- Moved "ammo_pickup" event hook to plugin start, to prevent errors throwing about no active hook.
 
 1.15 (19-Aug-2022)
 	- Added GameData file and new feature to reload the gun when changing ammo types. Requested by "Shao".
@@ -246,6 +249,9 @@ public void OnPluginStart()
 	#if DEBUG_PLUGIN
 	RegAdminCmd("sm_sa", CmdSA, ADMFLAG_ROOT, "For debugging Switch Ammo plugin.");
 	#endif
+
+	// Other
+	HookEvent("ammo_pickup", Event_AmmoPickup);
 }
 
 #if DEBUG_PLUGIN
@@ -360,7 +366,6 @@ void IsAllowed()
 		HookEvent("player_death",			Event_PlayerDeath);
 		HookEvent("player_spawn",			Event_PlayerSpawn);
 		HookEvent("weapon_fire",			Event_WeaponFire);
-		HookEvent("ammo_pickup",			Event_AmmoPickup);
 		HookEvent("receive_upgrade",		Event_GetUpgraded);
 
 		for( int i = 1; i <= MaxClients; i++ )
@@ -386,7 +391,6 @@ void IsAllowed()
 		UnhookEvent("player_spawn",			Event_PlayerSpawn);
 		UnhookEvent("player_death",			Event_PlayerDeath);
 		UnhookEvent("weapon_fire",			Event_WeaponFire);
-		UnhookEvent("ammo_pickup",			Event_AmmoPickup);
 		UnhookEvent("receive_upgrade",		Event_GetUpgraded);
 
 		for( int i = 1; i <= MaxClients; i++ )
@@ -693,11 +697,14 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 // Store ammo counts
 void Event_AmmoPickup(Event event, const char[] name, bool dontBroadcast)
 {
-	int userid = event.GetInt("userid");
-	int client = GetClientOfUserId(userid);
-	if( client < 1 || IsFakeClient(client) || GetClientTeam(client) != 2 ) return;
+	if( g_bCvarAllow )
+	{
+		int userid = event.GetInt("userid");
+		int client = GetClientOfUserId(userid);
+		if( client < 1 || IsFakeClient(client) || GetClientTeam(client) != 2 ) return;
 
-	RequestFrame(OnAmmoPickup, userid);
+		RequestFrame(OnAmmoPickup, userid);
+	}
 }
 
 // Delayed by 1 frame to get real ammo count values
