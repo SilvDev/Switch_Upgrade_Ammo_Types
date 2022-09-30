@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.16"
+#define PLUGIN_VERSION 		"1.17"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,11 @@
 
 ========================================================================================
 	Change Log:
+
+1.17 (30-Sep-2022)
+	- Added cvar "l4d2_switch_ammo_keys" to control the key combination for reloading.
+	- Setting the cvar as "2" will allow holding Reload to change ammo. Requested by "sonic155".
+	- The source contains a "MAX_TIME_KEY_HOLD" define set at 0.5 which controls how long to hold reload.
 
 1.16 (25-Aug-2022)
 	- Moved "ammo_pickup" event hook to plugin start, to prevent errors throwing about no active hook.
@@ -111,20 +116,23 @@
 #define TYPE_FIRES			(1<<0)
 #define TYPE_EXPLO			(1<<1)
 #define TYPE_STOCK			3
+#define MAX_TIME_KEY_HOLD	0.5
 
 // Setting to 1 re-creates the upgrade packs after use, for constant testing
-#define DEBUG_PLUGIN		0
+#define DEBUG_PLUGIN		1
 
 
-ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarGuns, g_hCvarHint, g_hCvarReload;
+ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarGuns, g_hCvarHint, g_hCvarKeys, g_hCvarReload;
 bool g_bCvarAllow, g_bTranslation, g_bMapStarted;
-int g_iCvarGuns, g_iCvarHint, g_iCvarReload, g_iOffsetAmmo, g_iPrimaryAmmoType;
+int g_iCvarGuns, g_iCvarHint, g_iCvarKeys, g_iCvarReload, g_iOffsetAmmo, g_iPrimaryAmmoType;
 int g_iAmmoCount[2048][4];				// Upgrade ammo [0]=UserId. [1]=Incendiary. [2]=Explosives. [3]=Stock
 
-bool g_bPlayerDied[MAXPLAYERS+1];
 int g_bBlockedUse[MAXPLAYERS+1];
 int g_iLastWeapon[MAXPLAYERS+1];
 int g_iTransition[MAXPLAYERS+1][4];
+bool g_bPlayerDied[MAXPLAYERS+1];
+bool g_bKeysHold[MAXPLAYERS+1];
+float g_fKeysHold[MAXPLAYERS+1];
 float g_fSwitched[MAXPLAYERS+1];
 char g_sTransition[MAXPLAYERS+1][32];
 
@@ -186,6 +194,7 @@ public void OnPluginStart()
 	g_hCvarAllow =		CreateConVar(	"l4d2_switch_ammo_allow",			"1",				"0=Plugin off, 1=Plugin on.", CVAR_FLAGS );
 	g_hCvarGuns =		CreateConVar(	"l4d2_switch_ammo_guns",			"0",				"Allow swapping ammo on: 0=Neither. 1=Grenade Launcher. 2=M60. 3=Both.", CVAR_FLAGS );
 	g_hCvarHint =		CreateConVar(	"l4d2_switch_ammo_hint",			"1",				"Display a hint when taking upgrade ammo about how to use the plugin. 0=Off. 1=Print to Chat. 2=Hint text.", CVAR_FLAGS );
+	g_hCvarKeys =		CreateConVar(	"l4d2_switch_ammo_keys",			"1",				"Which key combination to switch ammo. 1=Shift + Reload. 2=Holding Reload key.", CVAR_FLAGS );
 	g_hCvarReload =		CreateConVar(	"l4d2_switch_ammo_reload",			"0",				"0=Reload shotguns by emptying the clip when changing ammo types. 1=Shotguns will reload 1 bullet before the clip is full.", CVAR_FLAGS );
 	g_hCvarModes =		CreateConVar(	"l4d2_switch_ammo_modes",			"",					"Turn on the plugin in these game modes, separate by commas (no spaces). (Empty = all).", CVAR_FLAGS );
 	g_hCvarModesOff =	CreateConVar(	"l4d2_switch_ammo_modes_off",		"",					"Turn off the plugin in these game modes, separate by commas (no spaces). (Empty = none).", CVAR_FLAGS );
@@ -201,6 +210,7 @@ public void OnPluginStart()
 	g_hCvarAllow.AddChangeHook(ConVarChanged_Allow);
 	g_hCvarGuns.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarHint.AddChangeHook(ConVarChanged_Cvars);
+	g_hCvarKeys.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarReload.AddChangeHook(ConVarChanged_Cvars);
 
 	// =========================
@@ -345,6 +355,7 @@ void GetCvars()
 {
 	g_iCvarGuns = g_hCvarGuns.IntValue;
 	g_iCvarHint = g_hCvarHint.IntValue;
+	g_iCvarKeys = g_hCvarKeys.IntValue;
 	g_iCvarReload = g_hCvarReload.IntValue;
 }
 
@@ -572,6 +583,8 @@ void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 	int client = GetClientOfUserId(userid);
 	if( client && !g_bPlayerDied[client] )
 	{
+		g_bKeysHold[client] = false;
+		g_fKeysHold[client] = 0.0;
 		g_fSwitched[client] = 0.0;
 		g_iLastWeapon[client] = 0;
 
@@ -792,90 +805,116 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 // ====================================================================================================
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
 {
-	if( g_bCvarAllow && buttons & IN_SPEED && buttons & IN_RELOAD && GetGameTime() > g_fSwitched[client] )
+	if( g_bCvarAllow )
 	{
-		g_fSwitched[client] = GetGameTime() + 0.5;
-
-		// Validate Survivor
-		if( IsPlayerAlive(client) && GetClientTeam(client) == 2 && !IsFakeClient(client) )
+		if( buttons & IN_RELOAD && (g_iCvarKeys == 2 || buttons & IN_SPEED) )
 		{
-			weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-			if( weapon > 0 )
+			if( GetGameTime() > g_fSwitched[client] )
 			{
-				// Validate primary weapon and allowed to shoot
-				if( weapon == GetPlayerWeaponSlot(client, 0) && GetEntPropFloat(weapon, Prop_Data, "m_flNextPrimaryAttack") < GetGameTime() )
+				if( g_iCvarKeys == 2 )
 				{
-					// Validate not reloading,
-					if( GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
+					if( !g_bKeysHold[client] )
 					{
-						// Block weapons
-						if( g_bBlockedUse[client] ) return Plugin_Continue;
+						g_bKeysHold[client] = true;
+						g_fKeysHold[client] = GetGameTime() + MAX_TIME_KEY_HOLD;
+						return Plugin_Continue;
+					}
 
-						// Get upgrade ammo count and type
-						int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-						int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+					if( g_fKeysHold[client] > GetGameTime() )
+					{
+						return Plugin_Continue;
+					}
+				}
 
-						// Has upgraded ammo
-						if( ammo )
+				g_fSwitched[client] = GetGameTime() + 0.5;
+
+				// Validate Survivor
+				if( IsPlayerAlive(client) && GetClientTeam(client) == 2 && !IsFakeClient(client) )
+				{
+					weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+					if( weapon > 0 )
+					{
+						// Validate primary weapon and allowed to shoot
+						if( weapon == GetPlayerWeaponSlot(client, 0) && GetEntPropFloat(weapon, Prop_Data, "m_flNextPrimaryAttack") < GetGameTime() )
 						{
-							if( type & TYPE_FIRES )
-								g_iAmmoCount[weapon][TYPE_FIRES] = ammo;
-							else
-								g_iAmmoCount[weapon][TYPE_EXPLO] = ammo;
-
-							// Switch from fire to explosive
-							ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
-							if( type & TYPE_FIRES && ammo )
+							// Validate not reloading,
+							if( GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
 							{
-								ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+								// Block weapons
+								if( g_bBlockedUse[client] ) return Plugin_Continue;
 
-								type &= ~TYPE_FIRES;
-								type |= TYPE_EXPLO;
-								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+								// Get upgrade ammo count and type
+								int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+								int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
 
-								ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
-							}
-							// No explosive, reset to stock
-							else
-							{
-								ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+								// Has upgraded ammo
+								if( ammo )
+								{
+									if( type & TYPE_FIRES )
+										g_iAmmoCount[weapon][TYPE_FIRES] = ammo;
+									else
+										g_iAmmoCount[weapon][TYPE_EXPLO] = ammo;
 
-								// Reset to stock ammo
-								type &= ~TYPE_FIRES;
-								type &= ~TYPE_EXPLO;
-								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
+									// Switch from fire to explosive
+									ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+									if( type & TYPE_FIRES && ammo )
+									{
+										ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
 
-								ReloadWeapon(client, weapon, ammo, TYPE_STOCK);
-							}
-						}
-						else
-						{
-							if( g_iAmmoCount[weapon][TYPE_FIRES] )
-							{
-								ammo = g_iAmmoCount[weapon][TYPE_FIRES];
-								type |= TYPE_FIRES;
-								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
-								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+										type &= ~TYPE_FIRES;
+										type |= TYPE_EXPLO;
+										SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+										SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
 
-								ReloadWeapon(client, weapon, ammo, TYPE_FIRES);
-							}
-							else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
-							{
-								ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
-								type |= TYPE_EXPLO;
-								SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
-								SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
-								SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+										ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
+									}
+									// No explosive, reset to stock
+									else
+									{
+										ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
 
-								ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
+										// Reset to stock ammo
+										type &= ~TYPE_FIRES;
+										type &= ~TYPE_EXPLO;
+										SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+										SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", 0);
+
+										ReloadWeapon(client, weapon, ammo, TYPE_STOCK);
+									}
+								}
+								else
+								{
+									if( g_iAmmoCount[weapon][TYPE_FIRES] )
+									{
+										ammo = g_iAmmoCount[weapon][TYPE_FIRES];
+										type |= TYPE_FIRES;
+										SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+										SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+										SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+
+										ReloadWeapon(client, weapon, ammo, TYPE_FIRES);
+									}
+									else if( g_iAmmoCount[weapon][TYPE_EXPLO] )
+									{
+										ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
+										type |= TYPE_EXPLO;
+										SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
+										SetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded", ammo);
+										SetEntProp(weapon, Prop_Send, "m_iClip1", ammo);
+
+										ReloadWeapon(client, weapon, ammo, TYPE_EXPLO);
+									}
+								}
 							}
 						}
 					}
 				}
 			}
+		}
+		else
+		{
+			g_fKeysHold[client] = 0.0;
+			g_bKeysHold[client] = false;
 		}
 	}
 
