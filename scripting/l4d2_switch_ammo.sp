@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.17"
+#define PLUGIN_VERSION 		"1.18"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,10 @@
 
 ========================================================================================
 	Change Log:
+
+1.18 (04-Oct-2022)
+	- Updated translations for holding reload key method of changing ammo.
+	- Thanks to "NoroHime" for updating the Chinese translations.
 
 1.17 (30-Sep-2022)
 	- Added cvar "l4d2_switch_ammo_keys" to control the key combination for reloading.
@@ -181,7 +185,9 @@ public void OnPluginStart()
 	BuildPath(Path_SM, sPath, PLATFORM_MAX_PATH, "translations/switch_ammo.phrases.txt");
 
 	if( !FileExists(sPath) )
+	{
 		g_bTranslation = false;
+	}
 	else
 	{
 		LoadTranslations("switch_ammo.phrases");
@@ -759,12 +765,12 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 				{
 					if( g_iCvarHint == 1 )
 					{
-						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 %T", "About_Switch_Ammo", client);
+						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
 						CPrintToChat(client, sBuffer);
 					}
 					else
 					{
-						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] %T", "About_Switch_Ammo", client);
+						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
 						CPrintHintText(client, sBuffer);
 					}
 				}
@@ -772,12 +778,18 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 				{
 					if( g_iCvarHint == 1 )
 					{
-						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Press \x04SHIFT \x01+ \x04RELOAD \x01to switch between upgraded and normal ammo.");
+						if( g_iCvarKeys == 2 )
+							Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Hold \x04RELOAD \x01to switch between upgraded and normal ammo.");
+						else
+							Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Press \x04SHIFT \x01+ \x04RELOAD \x01to switch between upgraded and normal ammo.");
 						PrintToChat(client, sBuffer);
 					}
 					else
 					{
-						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Press SHIFT + RELOAD to switch between upgraded and normal ammo.");
+						if( g_iCvarKeys == 2 )
+							Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Hold RELOAD to switch between upgraded and normal ammo.");
+						else
+							Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Press SHIFT + RELOAD to switch between upgraded and normal ammo.");
 						PrintHintText(client, sBuffer);
 					}
 				}
