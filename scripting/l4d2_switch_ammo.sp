@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.19"
+#define PLUGIN_VERSION 		"1.20"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.20 (06-Nov-2022)
+	- Fixed invalid weapon error. Thanks to "NoroHime" for reporting.
 
 1.19 (10-Oct-2022)
 	- Now swaps ammo when holding the reload key when a clip isn't full and normal reloading has begun.
@@ -826,30 +829,31 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		{
 			if( GetGameTime() > g_fSwitched[client] )
 			{
-				// Holding reload method
-				weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-				if( g_iCvarKeys == 2 )
-				{
-					if( !g_bKeysHold[client] && GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
-					{
-						g_bKeysHold[client] = true;
-						g_fKeysHold[client] = GetGameTime() + MAX_TIME_KEY_HOLD;
-						return Plugin_Continue;
-					}
-
-					if( g_fKeysHold[client] > GetGameTime() )
-					{
-						return Plugin_Continue;
-					}
-				}
-
 				g_fSwitched[client] = GetGameTime() + 0.5;
 
 				// Validate Survivor
 				if( IsPlayerAlive(client) && GetClientTeam(client) == 2 && !IsFakeClient(client) )
 				{
-					if( weapon > 0 )
+					// Holding reload method
+					weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+
+					if( weapon != -1 )
 					{
+						if( g_iCvarKeys == 2 )
+						{
+							if( !g_bKeysHold[client] && GetEntProp(weapon, Prop_Send, "m_bInReload") == 0 )
+							{
+								g_bKeysHold[client] = true;
+								g_fKeysHold[client] = GetGameTime() + MAX_TIME_KEY_HOLD;
+								return Plugin_Continue;
+							}
+
+							if( g_fKeysHold[client] > GetGameTime() )
+							{
+								return Plugin_Continue;
+							}
+						}
+
 						// Validate primary weapon and allowed to shoot
 						if( weapon == GetPlayerWeaponSlot(client, 0) && (g_bKeysHold[client] || GetEntPropFloat(weapon, Prop_Data, "m_flNextPrimaryAttack") < GetGameTime()) )
 						{
