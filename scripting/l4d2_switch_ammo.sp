@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.21"
+#define PLUGIN_VERSION 		"1.22"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.22 (25-Jan-2023)
+	- Plugin now listens for the "upgrade_add" command for adding upgrade ammo.
 
 1.21 (20-Jan-2023)
 	- Plugin now switches to an upgraded ammo type if available, when stock ammo is depleted. Thanks to "swiftswing1" for reporting.
@@ -306,7 +309,8 @@ public void OnPluginStart()
 	// =========================
 	// OTHER
 	// =========================
-	AddCommandListener(CommandListener, "give");
+	AddCommandListener(CommandListenerAdd, "upgrade_add");
+	AddCommandListener(CommandListenerGive, "give");
 	HookEvent("ammo_pickup", Event_AmmoPickup);
 
 	// Debug
@@ -343,14 +347,30 @@ Action CmdSAA(int client, int args)
 }
 #endif
 
-Action CommandListener(int client, const char[] command, int args)
+Action CommandListenerAdd(int client, const char[] command, int args)
 {
 	if( args > 0 )
 	{
 		char buffer[6];
 		GetCmdArg(1, buffer, sizeof(buffer));
 
-		if( strcmp(buffer, "ammo") == 0 )
+		if( strcmp(buffer, "INCEN", false) == 0 || strcmp(buffer, "EXPLO", false) == 0 )
+		{
+			AddedUpgrade(client);
+		}
+	}
+
+	return Plugin_Continue;
+}
+
+Action CommandListenerGive(int client, const char[] command, int args)
+{
+	if( args > 0 )
+	{
+		char buffer[6];
+		GetCmdArg(1, buffer, sizeof(buffer));
+
+		if( strcmp(buffer, "ammo", false) == 0 )
 		{
 			RequestFrame(OnAmmoPickup, GetClientUserId(client));
 		}
@@ -950,66 +970,71 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 
 	if( sTemp[0] == 'E' || sTemp[0] == 'I' )
 	{
-		int weapon = GetPlayerWeaponSlot(client, 0);
-		int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+		AddedUpgrade(client);
+	}
+}
 
-		if( type & TYPE_FIRES ) type = TYPE_FIRES;
-		else if( type & TYPE_EXPLO ) type = TYPE_EXPLO;
-		else type = 0;
+void AddedUpgrade(int client)
+{
+	int weapon = GetPlayerWeaponSlot(client, 0);
+	int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
 
-		if( type )
+	if( type & TYPE_FIRES ) type = TYPE_FIRES;
+	else if( type & TYPE_EXPLO ) type = TYPE_EXPLO;
+	else type = 0;
+
+	if( type )
+	{
+		// Hint
+		if( g_iCvarHint )
 		{
-			// Hint
-			if( g_iCvarHint )
-			{
-				static char sBuffer[256];
+			static char sBuffer[256];
 
-				if( g_bTranslation )
+			if( g_bTranslation )
+			{
+				if( g_iCvarHint == 1 )
 				{
-					if( g_iCvarHint == 1 )
-					{
-						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
-						CPrintToChat(client, sBuffer);
-					}
-					else
-					{
-						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
-						CPrintHintText(client, sBuffer);
-					}
+					Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
+					CPrintToChat(client, sBuffer);
 				}
 				else
 				{
-					if( g_iCvarHint == 1 )
-					{
-						if( g_iCvarKeys == 2 )
-							Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Hold \x04RELOAD \x01to switch between upgraded and normal ammo.");
-						else
-							Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Press \x04SHIFT \x01+ \x04RELOAD \x01to switch between upgraded and normal ammo.");
-						PrintToChat(client, sBuffer);
-					}
-					else
-					{
-						if( g_iCvarKeys == 2 )
-							Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Hold RELOAD to switch between upgraded and normal ammo.");
-						else
-							Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Press SHIFT + RELOAD to switch between upgraded and normal ammo.");
-						PrintHintText(client, sBuffer);
-					}
+					Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] %T", g_iCvarKeys == 2 ? "About_Switch_Ammo_Hold" : "About_Switch_Ammo", client);
+					CPrintHintText(client, sBuffer);
 				}
 			}
-
-			// Save ammo counts
-			int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
-
-			if( g_iAmmoCount[weapon][0] == 0 || EntRefToEntIndex(g_iAmmoCount[weapon][0]) != weapon )
+			else
 			{
-				g_iAmmoCount[weapon][0] = EntIndexToEntRef(weapon);
-				g_iAmmoCount[weapon][1] = 0;
-				g_iAmmoCount[weapon][2] = 0;
+				if( g_iCvarHint == 1 )
+				{
+					if( g_iCvarKeys == 2 )
+						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Hold \x04RELOAD \x01to switch between upgraded and normal ammo.");
+					else
+						Format(sBuffer, sizeof(sBuffer), "\x04[\x01Switch Ammo\x04]\x01 Press \x04SHIFT \x01+ \x04RELOAD \x01to switch between upgraded and normal ammo.");
+					PrintToChat(client, sBuffer);
+				}
+				else
+				{
+					if( g_iCvarKeys == 2 )
+						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Hold RELOAD to switch between upgraded and normal ammo.");
+					else
+						Format(sBuffer, sizeof(sBuffer), "[Switch Ammo] Press SHIFT + RELOAD to switch between upgraded and normal ammo.");
+					PrintHintText(client, sBuffer);
+				}
 			}
-
-			g_iAmmoCount[weapon][type] = ammo;
 		}
+
+		// Save ammo counts
+		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
+
+		if( g_iAmmoCount[weapon][0] == 0 || EntRefToEntIndex(g_iAmmoCount[weapon][0]) != weapon )
+		{
+			g_iAmmoCount[weapon][0] = EntIndexToEntRef(weapon);
+			g_iAmmoCount[weapon][1] = 0;
+			g_iAmmoCount[weapon][2] = 0;
+		}
+
+		g_iAmmoCount[weapon][type] = ammo;
 	}
 }
 
