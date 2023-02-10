@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.22"
+#define PLUGIN_VERSION 		"1.23"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,10 @@
 
 ========================================================================================
 	Change Log:
+
+1.23 (10-Feb-2023)
+	- Fixed rare error about invalid entity. Thanks to "sonic155" for reporting.
+	- Fixed "Event_WeaponFire" errors when a Special Infected is on Survivor team. Thanks to "Voevoda" for reporting.
 
 1.22 (25-Jan-2023)
 	- Plugin now listens for the "upgrade_add" command for adding upgrade ammo.
@@ -806,6 +810,11 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 		{
 			weaponType = TYPE_TIER3;
 		}
+		// Tank / Hunter / Charger / Boomer / Smoker / Spitter / Jockey
+		case 38, 39, 40, 41, 42, 43, 44:
+		{
+			return;
+		}
 	}
 
 	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
@@ -1393,7 +1402,7 @@ void OnFrameAmmo(int client)
 	if( client && IsClientInGame(client) )
 	{
 		int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-		if( weapon == GetPlayerWeaponSlot(client, 0) )
+		if( weapon != -1 && weapon == GetPlayerWeaponSlot(client, 0) )
 		{
 			GetOrSetPlayerAmmo(client, weapon, g_iAmmoCount[weapon][TYPE_STOCK]);
 		}
