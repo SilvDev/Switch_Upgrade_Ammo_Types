@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.23"
+#define PLUGIN_VERSION 		"1.24"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.24 (19-Feb-2023)
+	- Fixed errors thrown due to Special Infected being on Survivor team. Thanks to "Voevoda" for reporting.
 
 1.23 (10-Feb-2023)
 	- Fixed rare error about invalid entity. Thanks to "sonic155" for reporting.
@@ -471,7 +474,7 @@ void IsAllowed()
 
 		for( int i = 1; i <= MaxClients; i++ )
 		{
-			if( IsClientInGame(i) && GetClientTeam(i) == 2 )
+			if( IsClientInGame(i) )
 			{
 				SDKHook(i, SDKHook_WeaponSwitch, OnWeaponSwitch);
 				SDKHook(i, SDKHook_WeaponCanSwitchTo, OnWeaponSwitch);
@@ -1356,7 +1359,7 @@ Action TimerReload(Handle timer, DataPack dPack)
 void GetPlayerAmmo(int client, bool shooting = false, int weaponType = TYPE_OTHER)
 {
 	int weapon = GetPlayerWeaponSlot(client, 0);
-	if( weapon != -1 )
+	if( weapon != -1 &&  HasEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded") )
 	{
 		int ammo = GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded");
 		int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
