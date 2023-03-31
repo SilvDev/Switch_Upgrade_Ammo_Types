@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.24"
+#define PLUGIN_VERSION 		"1.25"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.25 (31-Mar-2023)
+	- Fixed array out of bounds error. Thanks to "LindaFelicia" for reporting.
 
 1.24 (19-Feb-2023)
 	- Fixed errors thrown due to Special Infected being on Survivor team. Thanks to "Voevoda" for reporting.
@@ -883,17 +886,20 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 		{
 			if( g_iAmmoCount[weapon][TYPE_STOCK] == 0 && (g_iAmmoCount[weapon][TYPE_FIRES] || g_iAmmoCount[weapon][TYPE_EXPLO]) && GetEntProp(weapon, Prop_Send, "m_nUpgradedPrimaryAmmoLoaded") <= 1 )
 			{
+				int upgrade;
 				if( g_iAmmoCount[weapon][TYPE_FIRES] )
 				{
 					ammo = g_iAmmoCount[weapon][TYPE_FIRES];
 					type &= ~TYPE_EXPLO;
 					type |= TYPE_FIRES;
+					upgrade = TYPE_FIRES;
 				}
 				else
 				{
 					ammo = g_iAmmoCount[weapon][TYPE_EXPLO];
 					type &= ~TYPE_FIRES;
 					type |= TYPE_EXPLO;
+					upgrade = TYPE_EXPLO;
 				}
 
 				SetEntProp(weapon, Prop_Send, "m_upgradeBitVec", type);
@@ -906,7 +912,7 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 				dPack.WriteCell(GetClientUserId(client));
 				dPack.WriteCell(EntIndexToEntRef(weapon));
 				dPack.WriteCell(ammo);
-				dPack.WriteCell(type);
+				dPack.WriteCell(upgrade);
 
 				if( weaponType == TYPE_SHOTGUN )
 				{
