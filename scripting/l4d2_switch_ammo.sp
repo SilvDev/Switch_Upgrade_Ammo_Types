@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.25"
+#define PLUGIN_VERSION 		"1.26"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.26 (05-Sep-2023)
+	- Fixed the Grenade Launcher reloading in 3rd person being broken. Thanks to "Black_Wolf" for reporting.
 
 1.25 (31-Mar-2023)
 	- Fixed array out of bounds error. Thanks to "LindaFelicia" for reporting.
@@ -145,8 +148,8 @@
 #define TYPE_STOCK			3
 #define MAX_TIME_KEY_HOLD	0.5
 
-// Setting to 1 re-creates the upgrade packs after use, for constant testing
-#define DEBUG_PLUGIN		0
+// Setting to true re-creates the upgrade packs after use, for constant testing
+#define DEBUG_PLUGIN		true
 
 
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarGuns, g_hCvarHint, g_hCvarKeys, g_hCvarReload;
@@ -812,8 +815,16 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 			weaponType = TYPE_SHOTGUN;
 		}
 		// Grenade Launcher / Rifle M60
-		case 21, 37:
+		case 21:
 		{
+			if( g_iCvarGuns != 3 && g_iCvarGuns != 2 ) return; // Ignore GL
+
+			weaponType = TYPE_TIER3;
+		}
+		case 37:
+		{
+			if( g_iCvarGuns != 3 && g_iCvarGuns != 1 ) return; // Ignore M60
+
 			weaponType = TYPE_TIER3;
 		}
 		// Tank / Hunter / Charger / Boomer / Smoker / Spitter / Jockey
@@ -839,6 +850,8 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 
 			if( g_iAmmoCount[weapon][TYPE_STOCK] )
 			{
+				// if( id == 21 ) return; // Ignore GL, otherwise reloading in 3rd person is broken
+
 				ammo = g_iAmmoCount[weapon][TYPE_STOCK] + 1;
 				type &= ~TYPE_EXPLO;
 				type &= ~TYPE_FIRES;
@@ -872,7 +885,8 @@ void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 				dPack.WriteCell(ammo);
 				dPack.WriteCell(upgrade);
 				if( id == 21 ) // Grenade Launcher should reload straight away
-					TimerFrameReload(null, dPack);
+					// TimerFrameReload(null, dPack);
+					CreateTimer(0.1, TimerFrameReload, dPack);
 				else
 					CreateTimer(0.2, TimerFrameReload, dPack);
 
