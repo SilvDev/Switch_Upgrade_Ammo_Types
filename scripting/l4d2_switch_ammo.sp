@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.26"
+#define PLUGIN_VERSION 		"1.27"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.27 (17-Sep-2023)
+	- Fixed the last update accidentally enabling unlimited usage of upgrade ammo piles and removing laser spawns. Thanks to "Proaxel" for reporting.
 
 1.26 (05-Sep-2023)
 	- Fixed the Grenade Launcher reloading in 3rd person being broken. Thanks to "Black_Wolf" for reporting.
@@ -149,7 +152,7 @@
 #define MAX_TIME_KEY_HOLD	0.5
 
 // Setting to true re-creates the upgrade packs after use, for constant testing
-#define DEBUG_PLUGIN		true
+#define DEBUG_PLUGIN		false
 
 
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarGuns, g_hCvarHint, g_hCvarKeys, g_hCvarReload;
