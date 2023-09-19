@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.27"
+#define PLUGIN_VERSION 		"1.28"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.28 (19-Sep-2023)
+	- Fixed errors when late loading the plugin or enabling during gameplay. Thanks to "Proaxel" for reporting/
 
 1.27 (17-Sep-2023)
 	- Fixed the last update accidentally enabling unlimited usage of upgrade ammo piles and removing laser spawns. Thanks to "Proaxel" for reporting.
@@ -489,7 +492,10 @@ void IsAllowed()
 				SDKHook(i, SDKHook_WeaponCanSwitchTo, OnWeaponSwitch);
 				SDKHook(i, SDKHook_WeaponEquipPost, OnWeaponEquip);
 
-				GetPlayerAmmo(i);
+				if( GetClientTeam(i) == 2 )
+				{
+					GetPlayerAmmo(i);
+				}
 			}
 		}
 	}
@@ -768,24 +774,21 @@ Action OnWeaponSwitch(int client, int weapon)
 void OnWeaponEquip(int client, int weapon)
 {
 	// Block specific weapons
-	if( g_iCvarGuns != 3 )
+	if( g_iCvarGuns != 3 && GetClientTeam(client) == 2 && GetPlayerWeaponSlot(client, 0) == weapon )
 	{
-		if( GetPlayerWeaponSlot(client, 0) == weapon )
+		g_bBlockedUse[client] = false;
+
+		int ref = EntIndexToEntRef(weapon);
+		if( g_iLastWeapon[client] != ref )
 		{
-			g_bBlockedUse[client] = false;
+			g_iLastWeapon[client] = ref;
 
-			int ref = EntIndexToEntRef(weapon);
-			if( g_iLastWeapon[client] != ref )
-			{
-				g_iLastWeapon[client] = ref;
+			static char classname[32];
+			GetEdictClassname(weapon, classname, sizeof(classname));
 
-				static char classname[32];
-				GetEdictClassname(weapon, classname, sizeof(classname));
-
-				// Ignore these classes
-				if( (g_iCvarGuns == 0 || g_iCvarGuns == 1) && strcmp(classname[7], "rifle_m60") == 0 ) g_bBlockedUse[client] = true;
-				else if( (g_iCvarGuns == 0 || g_iCvarGuns == 2) && strncmp(classname[7], "grenade_l", 9) == 0 ) g_bBlockedUse[client] = true;
-			}
+			// Ignore these classes
+			if( (g_iCvarGuns == 0 || g_iCvarGuns == 1) && strcmp(classname[7], "rifle_m60") == 0 ) g_bBlockedUse[client] = true;
+			else if( (g_iCvarGuns == 0 || g_iCvarGuns == 2) && strncmp(classname[7], "grenade_l", 9) == 0 ) g_bBlockedUse[client] = true;
 		}
 	}
 
