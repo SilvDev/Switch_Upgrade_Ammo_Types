@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.28"
+#define PLUGIN_VERSION 		"1.29"
 
 /*======================================================================================
 	Plugin Info:
@@ -32,8 +32,11 @@
 ========================================================================================
 	Change Log:
 
+1.29 (07-Nov-2023)
+	- Fixed not deleting 1 handle on plugin start.
+
 1.28 (19-Sep-2023)
-	- Fixed errors when late loading the plugin or enabling during gameplay. Thanks to "Proaxel" for reporting/
+	- Fixed errors when late loading the plugin or enabling during gameplay. Thanks to "Proaxel" for reporting.
 
 1.27 (17-Sep-2023)
 	- Fixed the last update accidentally enabling unlimited usage of upgrade ammo piles and removing laser spawns. Thanks to "Proaxel" for reporting.
@@ -318,6 +321,8 @@ public void OnPluginStart()
 	g_hSDK_Call_Reload = EndPrepSDKCall();
 	if( g_hSDK_Call_Reload == null )
 		SetFailState("Failed to create SDKCall: CTerrorGun::Reload");
+
+	delete hGameData;
 
 	// =========================
 	// OFFSETS
