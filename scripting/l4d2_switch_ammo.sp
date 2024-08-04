@@ -1,6 +1,6 @@
 /*
 *	Switch Upgrade Ammo Types
-*	Copyright (C) 2023 Silvers
+*	Copyright (C) 2024 Silvers
 *
 *	This program is free software: you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.29"
+#define PLUGIN_VERSION 		"1.30"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.30 (04-Aug-2024)
+	- Fixed invalid entity error. Thanks to "sonic155" for reporting.
 
 1.29 (07-Nov-2023)
 	- Fixed not deleting 1 handle on plugin start.
@@ -1020,6 +1023,8 @@ void Event_GetUpgraded(Event event, const char[] name, bool dontBroadcast)
 void AddedUpgrade(int client)
 {
 	int weapon = GetPlayerWeaponSlot(client, 0);
+	if( weapon == -1 ) return;
+
 	int type = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
 
 	if( type & TYPE_FIRES ) type = TYPE_FIRES;
